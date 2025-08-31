@@ -19,9 +19,62 @@ struct LiveGameScreen: View {
     // All-time leaderboard (name -> total score)
     @State private var allTimeTotals: [String: Int] = [:]
     private let allTimeTotalsStorageKey = "WATS_allTimeTotals_v1"
+    // Full Rules & Scoring content (from iOS version)
+    @State private var rulesText: String = """
+RULES & SCORING
+
+OBJECTIVE
+Guess what product or category is being sold on screen before the reveal. The app is the scorekeeper; the host controls scoring.
+
+SETUP
+• Agree on acceptable categories up front (see list below).
+• Players can shout guesses at any time; the host decides when to award points.
+• The app only tracks scores and game history; it does not auto-judge answers.
+
+HOW TO PLAY
+1) Watch a segment.
+2) Before the reveal, players guess the product/category.
+3) On reveal, the host decides who was correct and awards points.
+4) Use the +1 / +3 / +5 buttons to assign points.
+5) Tap “End Game” to record the session; a new game starts automatically.
+
+SCORING
+• +3  Exact Match – Player names the correct primary category (or the exact product category you agreed counts).
+• +1  Fastest Correct (optional) – First correct guess gets an extra +1.
+• +5  Wildcard “Nailed It” (optional) – For an especially precise or clever guess (brand/subcategory/feature) at host’s discretion.
+• +1  Partial Credit – For close-but-not-quite answers to keep momentum.
+
+CLOSE CALLS & JUDGING
+• Use the retailer’s PRIMARY category or the on-screen classification when in doubt.
+• If an item spans multiple categories, accept the primary one.
+• House rules: award partials generously to keep the pace fun.
+
+WINNING & VARIATIONS
+• Target Score – First to 21 (or 31) wins.
+• Lightning Round – 30–60 sec clips, rapid-fire guesses, award +1 only.
+• Category Draft – Each player drafts 2–3 categories; they alone can score +3 in their drafted categories (others still earn +1 partials).
+• Loser’s Tax – Lowest score hosts the next round.
+
+ACCEPTABLE CATEGORIES
+• Beauty & Personal Care
+• Fashion, Footwear & Accessories (includes Jewelry & Watches)
+• Home & Furniture (includes Cleaning & Organization)
+• Kitchen & Dining
+• Appliances
+• Electronics (phones, computers, TV & home theater)
+• Sports, Fitness & Outdoors
+• Grocery, Snacks & Beverages
+• Baby, Kids, Toys & Games
+• Pets
+• Auto, DIY & Tools
+• Garden & Outdoor Living
+• Travel, Office & School
+• Seasonal & Holiday
+• Miscellaneous
+"""
     @State private var showConfirmEndGame: Bool = false
     // Right-rail overlay panel state
-    private enum RailPanel { case none, settings, recent, allTime }
+    private enum RailPanel { case none, settings, recent, allTime, rules }
     @State private var activePanel: RailPanel = .none
 
     // Scene phase to manage screensaver/idle timer
@@ -113,6 +166,11 @@ struct LiveGameScreen: View {
     private func rightRail(width: CGFloat, height: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             switch activePanel {
+            case .rules:
+                panelHeader(title: "Rules & Scoring", twoLine: true, centered: true)
+                Divider()
+                rulesPanelContent
+                Spacer()
             case .none:
                 // Default: scorekeeper
                 titleView
@@ -142,6 +200,55 @@ struct LiveGameScreen: View {
         }
         .frame(width: width, height: height)
         .background(Color.black.opacity(0.35))
+    }
+    @ViewBuilder
+    private var rulesPanelContent: some View {
+        FocusableRulesList(text: rulesText)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private struct FocusableRulesList: View {
+        let text: String
+        @FocusState private var focusedIndex: Int?
+
+        private var paragraphs: [String] {
+            // Split on blank lines to create focusable chunks for tvOS
+            text.components(separatedBy: "\n\n").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        }
+
+        var body: some View {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach(Array(paragraphs.enumerated()), id: \.offset) { index, para in
+                        ParagraphRow(text: para, isFocused: focusedIndex == index)
+                            .focusable(true)
+                            .focused($focusedIndex, equals: index)
+                    }
+                    Color.clear
+                        .frame(height: 240) // extra scroll runway so the final items aren’t clipped and remain reachable by focus on tvOS
+                }
+                .padding()
+            }
+            .onAppear {
+                // Ensure something is focused so the remote can scroll immediately
+                if focusedIndex == nil { focusedIndex = 0 }
+            }
+        }
+    }
+
+    private struct ParagraphRow: View {
+        let text: String
+        let isFocused: Bool
+        var body: some View {
+            let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+            Text(text)
+                .font(.body)
+                .multilineTextAlignment(.leading)
+                .lineSpacing(4)
+                .padding(8)
+                .background(shape.fill(Color.white.opacity(isFocused ? 0.08 : 0.00)))
+                .overlay(shape.stroke(Color.white.opacity(isFocused ? 0.25 : 0.00), lineWidth: 1))
+        }
     }
 
 
@@ -351,92 +458,124 @@ struct LiveGameScreen: View {
 
     @ViewBuilder
     private var bottomBar: some View {
-        // A single row along the bottom of the screen, full width
-        ZStack {
-            Color.black.opacity(0.35)
-        }
-        .overlay(
-            HStack(spacing: 16) {
-                switch activePanel {
-                case .none:
-                    // Left-side actions
-                    Button("📜 Recent Games") { activePanel = .recent }
-                        .buttonStyle(.bordered)
-                        .lineLimit(1)
-                    Button("🏆 All-Time Leaderboard") { activePanel = .allTime }
-                        .buttonStyle(.bordered)
-                        .lineLimit(1)
+        HStack(spacing: 16) {
+            switch activePanel {
+            case .none:
+                // Left-side actions
+                Button("📘 Rules") { activePanel = .rules }
+                    .buttonStyle(.bordered)
+                    .lineLimit(1)
+                Button("📜 Recent Games") { activePanel = .recent }
+                    .buttonStyle(.bordered)
+                    .lineLimit(1)
+                Button("🏆 All-Time Leaderboard") { activePanel = .allTime }
+                    .buttonStyle(.bordered)
+                    .lineLimit(1)
 
-                    Spacer()
+                Spacer()
 
-                    // Right-side primary actions
-                    Button("🏁 End Game") { showConfirmEndGame = true }
-                        .buttonStyle(.borderedProminent)
-                        .lineLimit(1)
-                    Button("⚙️ Settings") { activePanel = .settings }
-                        .buttonStyle(.bordered)
-                        .lineLimit(1)
+                // Right-side primary actions
+                Button("🏁 End Game") { showConfirmEndGame = true }
+                    .buttonStyle(.borderedProminent)
+                    .lineLimit(1)
+                Button("⚙️ Settings") { activePanel = .settings }
+                    .buttonStyle(.bordered)
+                    .lineLimit(1)
 
-                case .recent:
-                    // Left-side actions (replace selected with Back)
-                    Button("⬅️ Back to Scores") { activePanel = .none }
-                        .buttonStyle(.bordered)
-                        .lineLimit(1)
-                    Button("🏆 All-Time Leaderboard") { activePanel = .allTime }
-                        .buttonStyle(.bordered)
-                        .lineLimit(1)
+            case .recent:
+                // Left-side actions (replace selected with Back)
+                Button("📘 Rules") { activePanel = .rules }
+                    .buttonStyle(.bordered)
+                    .lineLimit(1)
+                Button("⬅️ Back to Scores") { activePanel = .none }
+                    .buttonStyle(.bordered)
+                    .lineLimit(1)
+                Button("🏆 All-Time Leaderboard") { activePanel = .allTime }
+                    .buttonStyle(.bordered)
+                    .lineLimit(1)
 
-                    Spacer()
+                Spacer()
 
-                    // Right-side primary actions
-                    Button("🏁 End Game") { showConfirmEndGame = true }
-                        .buttonStyle(.borderedProminent)
-                        .lineLimit(1)
-                    Button("⚙️ Settings") { activePanel = .settings }
-                        .buttonStyle(.bordered)
-                        .lineLimit(1)
+                // Right-side primary actions
+                Button("🏁 End Game") { showConfirmEndGame = true }
+                    .buttonStyle(.borderedProminent)
+                    .lineLimit(1)
+                Button("⚙️ Settings") { activePanel = .settings }
+                    .buttonStyle(.bordered)
+                    .lineLimit(1)
 
-                case .allTime:
-                    // Left-side actions (replace selected with Back)
-                    Button("📜 Recent Games") { activePanel = .recent }
-                        .buttonStyle(.bordered)
-                        .lineLimit(1)
-                    Button("⬅️ Back to Scores") { activePanel = .none }
-                        .buttonStyle(.bordered)
-                        .lineLimit(1)
+            case .allTime:
+                // Left-side actions (replace selected with Back)
+                Button("📘 Rules") { activePanel = .rules }
+                    .buttonStyle(.bordered)
+                    .lineLimit(1)
+                Button("📜 Recent Games") { activePanel = .recent }
+                    .buttonStyle(.bordered)
+                    .lineLimit(1)
+                Button("⬅️ Back to Scores") { activePanel = .none }
+                    .buttonStyle(.bordered)
+                    .lineLimit(1)
 
-                    Spacer()
+                Spacer()
 
-                    // Right-side primary actions
-                    Button("🏁 End Game") { showConfirmEndGame = true }
-                        .buttonStyle(.borderedProminent)
-                        .lineLimit(1)
-                    Button("⚙️ Settings") { activePanel = .settings }
-                        .buttonStyle(.bordered)
-                        .lineLimit(1)
+                // Right-side primary actions
+                Button("🏁 End Game") { showConfirmEndGame = true }
+                    .buttonStyle(.borderedProminent)
+                    .lineLimit(1)
+                Button("⚙️ Settings") { activePanel = .settings }
+                    .buttonStyle(.bordered)
+                    .lineLimit(1)
 
-                case .settings:
-                    // Left-side actions (show other panels)
-                    Button("📜 Recent Games") { activePanel = .recent }
-                        .buttonStyle(.bordered)
-                        .lineLimit(1)
-                    Button("🏆 All-Time Leaderboard") { activePanel = .allTime }
-                        .buttonStyle(.bordered)
-                        .lineLimit(1)
+            case .settings:
+                // Left-side actions (show other panels)
+                Button("📘 Rules") { activePanel = .rules }
+                    .buttonStyle(.bordered)
+                    .lineLimit(1)
+                Button("📜 Recent Games") { activePanel = .recent }
+                    .buttonStyle(.bordered)
+                    .lineLimit(1)
+                Button("🏆 All-Time Leaderboard") { activePanel = .allTime }
+                    .buttonStyle(.bordered)
+                    .lineLimit(1)
 
-                    Spacer()
+                Spacer()
 
-                    // Right-side primary actions (Back to Scores replaces Settings here)
-                    Button("🏁 End Game") { showConfirmEndGame = true }
-                        .buttonStyle(.borderedProminent)
-                        .lineLimit(1)
-                    Button("⬅️ Back to Scores") { activePanel = .none }
-                        .buttonStyle(.bordered)
-                        .lineLimit(1)
-                }
+                // Right-side primary actions (Back to Scores replaces Settings here)
+                Button("🏁 End Game") { showConfirmEndGame = true }
+                    .buttonStyle(.borderedProminent)
+                    .lineLimit(1)
+                Button("⬅️ Back to Scores") { activePanel = .none }
+                    .buttonStyle(.bordered)
+                    .lineLimit(1)
+
+            case .rules:
+                // Left-side actions: Back to Scores, plus usual nav
+                Button("⬅️ Back to Scores") { activePanel = .none }
+                    .buttonStyle(.bordered)
+                    .lineLimit(1)
+                Button("📜 Recent Games") { activePanel = .recent }
+                    .buttonStyle(.bordered)
+                    .lineLimit(1)
+                Button("🏆 All-Time Leaderboard") { activePanel = .allTime }
+                    .buttonStyle(.bordered)
+                    .lineLimit(1)
+
+                Spacer()
+
+                // Right-side primary actions
+                Button("🏁 End Game") { showConfirmEndGame = true }
+                    .buttonStyle(.borderedProminent)
+                    .lineLimit(1)
+                Button("⚙️ Settings") { activePanel = .settings }
+                    .buttonStyle(.bordered)
+                    .lineLimit(1)
             }
-            .padding(.horizontal, 24)
-        )
+        }
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity)
+        .frame(height: 88)
+        .background(Color.black.opacity(0.35))
+        .ignoresSafeArea(edges: .bottom)
         .confirmationDialog(
             "End current game?",
             isPresented: $showConfirmEndGame,
@@ -447,8 +586,6 @@ struct LiveGameScreen: View {
         } message: {
             Text("This will record the current scores to Recent Games, add them to the All-Time Leaderboard, reset all scores to 0, and start a new game.")
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: 88)
     }
 
     // MARK: - Logic
