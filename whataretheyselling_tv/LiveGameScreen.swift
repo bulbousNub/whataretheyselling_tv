@@ -359,83 +359,78 @@ struct LiveGameScreen: View {
             HStack(spacing: 16) {
                 switch activePanel {
                 case .none:
-                    // Always show End Game
-                    Button("End Game") { showConfirmEndGame = true }
-                        .buttonStyle(.borderedProminent)
+                    // Left-side actions
+                    Button("📜 Recent Games") { activePanel = .recent }
+                        .buttonStyle(.bordered)
+                        .lineLimit(1)
+                    Button("🏆 All-Time Leaderboard") { activePanel = .allTime }
+                        .buttonStyle(.bordered)
                         .lineLimit(1)
 
-                    Button("Recent Games") { activePanel = .recent }
-                        .buttonStyle(.bordered)
-                        .lineLimit(1)
-                    Button("All-Time Leaderboard") { activePanel = .allTime }
-                        .buttonStyle(.bordered)
-                        .lineLimit(1)
                     Spacer()
-                    Button {
-                        activePanel = .settings
-                    } label: {
-                        Label("Settings", systemImage: "gear")
-                            .labelStyle(.titleAndIcon)
-                            .lineLimit(1)
-                    }
-                    .buttonStyle(.bordered)
+
+                    // Right-side primary actions
+                    Button("🏁 End Game") { showConfirmEndGame = true }
+                        .buttonStyle(.borderedProminent)
+                        .lineLimit(1)
+                    Button("⚙️ Settings") { activePanel = .settings }
+                        .buttonStyle(.bordered)
+                        .lineLimit(1)
 
                 case .recent:
-                    Button("End Game") { showConfirmEndGame = true }
-                        .buttonStyle(.borderedProminent)
+                    // Left-side actions (replace selected with Back)
+                    Button("⬅️ Back to Scores") { activePanel = .none }
+                        .buttonStyle(.bordered)
+                        .lineLimit(1)
+                    Button("🏆 All-Time Leaderboard") { activePanel = .allTime }
+                        .buttonStyle(.bordered)
                         .lineLimit(1)
 
-                    // Replace Recent with Back to Scores
-                    Button("Back to Scores") { activePanel = .none }
-                        .buttonStyle(.bordered)
-                        .lineLimit(1)
-                    Button("All-Time Leaderboard") { activePanel = .allTime }
-                        .buttonStyle(.bordered)
-                        .lineLimit(1)
                     Spacer()
-                    Button {
-                        activePanel = .settings
-                    } label: {
-                        Label("Settings", systemImage: "gear")
-                            .labelStyle(.titleAndIcon)
-                            .lineLimit(1)
-                    }
-                    .buttonStyle(.bordered)
+
+                    // Right-side primary actions
+                    Button("🏁 End Game") { showConfirmEndGame = true }
+                        .buttonStyle(.borderedProminent)
+                        .lineLimit(1)
+                    Button("⚙️ Settings") { activePanel = .settings }
+                        .buttonStyle(.bordered)
+                        .lineLimit(1)
 
                 case .allTime:
-                    Button("End Game") { showConfirmEndGame = true }
-                        .buttonStyle(.borderedProminent)
+                    // Left-side actions (replace selected with Back)
+                    Button("📜 Recent Games") { activePanel = .recent }
+                        .buttonStyle(.bordered)
+                        .lineLimit(1)
+                    Button("⬅️ Back to Scores") { activePanel = .none }
+                        .buttonStyle(.bordered)
                         .lineLimit(1)
 
-                    Button("Recent Games") { activePanel = .recent }
-                        .buttonStyle(.bordered)
-                        .lineLimit(1)
-                    Button("Back to Scores") { activePanel = .none }
-                        .buttonStyle(.bordered)
-                        .lineLimit(1)
                     Spacer()
-                    Button {
-                        activePanel = .settings
-                    } label: {
-                        Label("Settings", systemImage: "gear")
-                            .labelStyle(.titleAndIcon)
-                            .lineLimit(1)
-                    }
-                    .buttonStyle(.bordered)
+
+                    // Right-side primary actions
+                    Button("🏁 End Game") { showConfirmEndGame = true }
+                        .buttonStyle(.borderedProminent)
+                        .lineLimit(1)
+                    Button("⚙️ Settings") { activePanel = .settings }
+                        .buttonStyle(.bordered)
+                        .lineLimit(1)
 
                 case .settings:
-                    Button("End Game") { showConfirmEndGame = true }
-                        .buttonStyle(.borderedProminent)
+                    // Left-side actions (show other panels)
+                    Button("📜 Recent Games") { activePanel = .recent }
+                        .buttonStyle(.bordered)
+                        .lineLimit(1)
+                    Button("🏆 All-Time Leaderboard") { activePanel = .allTime }
+                        .buttonStyle(.bordered)
                         .lineLimit(1)
 
-                    Button("Recent Games") { activePanel = .recent }
-                        .buttonStyle(.bordered)
-                        .lineLimit(1)
-                    Button("All-Time Leaderboard") { activePanel = .allTime }
-                        .buttonStyle(.bordered)
-                        .lineLimit(1)
                     Spacer()
-                    Button("Back to Scores") { activePanel = .none }
+
+                    // Right-side primary actions (Back to Scores replaces Settings here)
+                    Button("🏁 End Game") { showConfirmEndGame = true }
+                        .buttonStyle(.borderedProminent)
+                        .lineLimit(1)
+                    Button("⬅️ Back to Scores") { activePanel = .none }
                         .buttonStyle(.bordered)
                         .lineLimit(1)
                 }
@@ -613,15 +608,18 @@ struct SettingsScreen: View {
                 List {
                     ForEach(players.indices, id: \.self) { idx in
                         let p = players[idx]
-                        HStack {
+                        HStack(spacing: 12) {
                             Text(p.name)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
                             Spacer()
                             if !protectedNames.contains(p.name) {
-                                Button(role: .destructive) { remove(at: idx) } label: {
-                                    Label("Remove", systemImage: "trash")
-                                }
+                                FocusTrashIcon { remove(at: idx) }
                             } else {
-                                Text("Required").foregroundColor(.secondary).font(.footnote)
+                                Text("Required")
+                                    .foregroundColor(.secondary)
+                                    .font(.footnote)
+                                    .lineLimit(1)
                             }
                         }
                     }
@@ -692,6 +690,30 @@ struct SettingsScreen: View {
         let name = players[index].name
         guard !protectedNames.contains(name) else { return }
         players.remove(at: index)
+    }
+    private struct FocusTrashIcon: View {
+        let action: () -> Void
+        @FocusState private var isFocused: Bool
+
+        var body: some View {
+            let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+            ZStack {
+                shape
+                    .fill(Color.red.opacity(isFocused ? 0.22 : 0.12))
+                shape
+                    .stroke(Color.red.opacity(isFocused ? 0.90 : 0.50), lineWidth: isFocused ? 2 : 1)
+                Image(systemName: "trash.fill")
+                    .foregroundColor(.red)
+                    .imageScale(.large)
+            }
+            .frame(width: 44, height: 44)
+            .contentShape(shape)
+            .scaleEffect(isFocused ? 1.05 : 1.0)
+            .animation(.easeOut(duration: 0.12), value: isFocused)
+            .focusable(true)
+            .focused($isFocused)
+            .onTapGesture { action() }
+        }
     }
 }
 
