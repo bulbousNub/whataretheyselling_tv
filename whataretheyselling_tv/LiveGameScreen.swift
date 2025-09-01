@@ -8,10 +8,11 @@ struct LiveGameScreen: View {
 
     // MARK: - State
     @State private var player = AVPlayer()
-    private enum Channel: String { case qvc = "QVC", qvc2 = "QVC 2", hsn = "HSN" }
+    private enum Channel: String { case qvc = "QVC", qvc2 = "QVC 2", hsn = "HSN", hsn2 = "HSN 2" }
     @State private var selectedChannel: Channel = .qvc
     private let qvc2URL = URL(string: "https://qvc-amd-live.akamaized.net/hls/live/2034113/lsqvc2us/master.m3u8")!
     private let hsnURL = URL(string: "https://qvc-amd-live.akamaized.net/hls/live/2034113/lshsn1us/master.m3u8")!
+    private let hsn2URL = URL(string: "https://qvc-amd-live.akamaized.net/hls/live/2034113/lshsn2us/master.m3u8")!
     @State private var players: [Player] = []
     @State private var newPlayerNameRail: String = ""
     private let playersStorageKey = "WATS_players_v1"
@@ -137,6 +138,8 @@ ACCEPTABLE CATEGORIES
                 // Initialize selected channel based on the provided streamURL
                 if streamURL.absoluteString == qvc2URL.absoluteString {
                     selectedChannel = .qvc2
+                } else if streamURL.absoluteString == hsn2URL.absoluteString {
+                    selectedChannel = .hsn2
                 } else if streamURL.absoluteString == hsnURL.absoluteString {
                     selectedChannel = .hsn
                 } else {
@@ -476,6 +479,16 @@ ACCEPTABLE CATEGORIES
                 CompactChannelSegment(title: Channel.hsn.rawValue, isSelected: selected == .hsn) {
                     selected = .hsn
                 }
+
+                // divider
+                Rectangle()
+                    .fill(Color.white.opacity(0.25))
+                    .frame(width: 1, height: 18)
+                    .padding(.vertical, 6)
+
+                CompactChannelSegment(title: Channel.hsn2.rawValue, isSelected: selected == .hsn2) {
+                    selected = .hsn2
+                }
             }
             .padding(6)
             .background(shape.fill(Color.black.opacity(0.35)))
@@ -782,6 +795,8 @@ ACCEPTABLE CATEGORIES
             url = qvc2URL
         case .hsn:
             url = hsnURL
+        case .hsn2:
+            url = hsn2URL
         }
         let item = AVPlayerItem(url: url)
         player.replaceCurrentItem(with: item)
