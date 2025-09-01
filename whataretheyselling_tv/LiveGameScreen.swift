@@ -8,8 +8,9 @@ struct LiveGameScreen: View {
 
     // MARK: - State
     @State private var player = AVPlayer()
-    private enum Channel: String { case qvc = "QVC", hsn = "HSN" }
+    private enum Channel: String { case qvc = "QVC", qvc2 = "QVC 2", hsn = "HSN" }
     @State private var selectedChannel: Channel = .qvc
+    private let qvc2URL = URL(string: "https://qvc-amd-live.akamaized.net/hls/live/2034113/lsqvc2us/master.m3u8")!
     private let hsnURL = URL(string: "https://qvc-amd-live.akamaized.net/hls/live/2034113/lshsn1us/master.m3u8")!
     @State private var players: [Player] = []
     @State private var newPlayerNameRail: String = ""
@@ -134,7 +135,9 @@ ACCEPTABLE CATEGORIES
             .onAppear {
                 setIdleTimerDisabled(true)
                 // Initialize selected channel based on the provided streamURL
-                if streamURL.absoluteString == hsnURL.absoluteString {
+                if streamURL.absoluteString == qvc2URL.absoluteString {
+                    selectedChannel = .qvc2
+                } else if streamURL.absoluteString == hsnURL.absoluteString {
                     selectedChannel = .hsn
                 } else {
                     selectedChannel = .qvc
@@ -454,7 +457,17 @@ ACCEPTABLE CATEGORIES
                     selected = .qvc
                 }
 
-                // subtle divider between segments
+                // divider
+                Rectangle()
+                    .fill(Color.white.opacity(0.25))
+                    .frame(width: 1, height: 18)
+                    .padding(.vertical, 6)
+
+                CompactChannelSegment(title: Channel.qvc2.rawValue, isSelected: selected == .qvc2) {
+                    selected = .qvc2
+                }
+
+                // divider
                 Rectangle()
                     .fill(Color.white.opacity(0.25))
                     .frame(width: 1, height: 18)
@@ -761,7 +774,15 @@ ACCEPTABLE CATEGORIES
         return records
     }
     private func setChannel(_ ch: Channel) {
-        let url = (ch == .qvc) ? streamURL : hsnURL
+        let url: URL
+        switch ch {
+        case .qvc:
+            url = streamURL
+        case .qvc2:
+            url = qvc2URL
+        case .hsn:
+            url = hsnURL
+        }
         let item = AVPlayerItem(url: url)
         player.replaceCurrentItem(with: item)
         player.play()
