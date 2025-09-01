@@ -270,34 +270,7 @@ ACCEPTABLE CATEGORIES
 
     @ViewBuilder
     private var recentGamesListContent: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                if recentGames.isEmpty {
-                    Text("No recent games yet")
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal)
-                } else {
-                    ForEach(recentGames.reversed()) { game in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("\(dateShort(game.startedAt)) → \(dateShort(game.endedAt))")
-                                .font(.headline)
-                            ForEach(game.entries) { entry in
-                                HStack {
-                                    Text(entry.name)
-                                    Spacer()
-                                    Text("\(entry.score)")
-                                        .monospacedDigit()
-                                }
-                            }
-                        }
-                        .padding()
-                        .background(Color.white.opacity(0.06))
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    }
-                }
-            }
-            .padding()
-        }
+        FocusableRecentGamesList(games: recentGames)
     }
 
     @ViewBuilder
@@ -954,3 +927,65 @@ struct AllTimeLeaderboardScreen: View {
         }
     }
 }
+
+fileprivate func dateShortStatic(_ d: Date) -> String {
+    let df = DateFormatter()
+    df.dateStyle = .short
+    df.timeStyle = .short
+    return df.string(from: d)
+}
+
+    private struct FocusableRecentGamesList: View {
+        let games: [GameRecord]
+        @FocusState private var focusedIndex: Int?
+
+        private var displayGames: [GameRecord] { games.reversed() }
+
+        var body: some View {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 16) {
+                    if displayGames.isEmpty {
+                        Text("No recent games yet")
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal)
+                    } else {
+                        ForEach(Array(displayGames.enumerated()), id: \.offset) { index, game in
+                            GameCard(game: game, isFocused: focusedIndex == index)
+                                .focusable(true)
+                                .focused($focusedIndex, equals: index)
+                        }
+                        // Extra scroll runway so final items aren’t clipped and remain reachable by focus on tvOS
+                        Color.clear
+                            .frame(height: 240)
+                    }
+                }
+                .padding()
+            }
+            .onAppear {
+                if focusedIndex == nil { focusedIndex = 0 }
+            }
+        }
+    }
+
+    private struct GameCard: View {
+        let game: GameRecord
+        let isFocused: Bool
+        var body: some View {
+            let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("\(dateShortStatic(game.startedAt)) → \(dateShortStatic(game.endedAt))")
+                    .font(.headline)
+                ForEach(game.entries) { entry in
+                    HStack {
+                        Text(entry.name)
+                        Spacer()
+                        Text("\(entry.score)")
+                            .monospacedDigit()
+                    }
+                }
+            }
+            .padding()
+            .background(shape.fill(Color.white.opacity(isFocused ? 0.10 : 0.06)))
+            .overlay(shape.stroke(Color.white.opacity(isFocused ? 0.30 : 0.00), lineWidth: 1))
+        }
+    }
