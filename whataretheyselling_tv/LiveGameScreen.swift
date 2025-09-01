@@ -10,9 +10,38 @@ struct LiveGameScreen: View {
     @State private var player = AVPlayer()
     private enum Channel: String { case qvc = "QVC", qvc2 = "QVC 2", hsn = "HSN", hsn2 = "HSN 2" }
     @State private var selectedChannel: Channel = .qvc
+    // Scrollable channel picker model/state
+    private struct ChannelItem: Identifiable, Equatable {
+        let id = UUID()
+        let title: String
+        let url: URL
+    }
+    @State private var channelItems: [ChannelItem] = []
+    @State private var selectedChannelIndex: Int = 0
+    // Horizontal scroll state for channel bar
+    @State private var channelContentWidth: CGFloat = 0
+    @State private var channelScrollOffset: CGFloat = 0
+    @State private var channelHasMoreLeft: Bool = false
+    @State private var channelHasMoreRight: Bool = false
+    @State private var channelCanScroll: Bool = false
     private let qvc2URL = URL(string: "https://qvc-amd-live.akamaized.net/hls/live/2034113/lsqvc2us/master.m3u8")!
     private let hsnURL = URL(string: "https://qvc-amd-live.akamaized.net/hls/live/2034113/lshsn1us/master.m3u8")!
     private let hsn2URL = URL(string: "https://qvc-amd-live.akamaized.net/hls/live/2034113/lshsn2us/master.m3u8")!
+    // Additional channels
+    private let qvc1URL = URL(string: "https://qvc-amd-live.akamaized.net/hls/live/2034113/lsqvc1us/master.m3u8")!
+    private let qvc3URL = URL(string: "https://qvc-amd-live.akamaized.net/hls/live/2034113/lsqvc3us/master.m3u8")!
+    private let inTheKitchenURL = URL(string: "https://qvc-amd-live.akamaized.net/hls/live/2034113/lsqvc4us/master.m3u8")!
+    private let qvcUKURL = URL(string: "https://qvcuk-live.akamaized.net/hls/live/2097112/qvc/master.m3u8")!
+    private let qvcUKBeautyURL = URL(string: "https://qvcuk-live.akamaized.net/hls/live/2097112/qby/master.m3u8")!
+    private let qvcUKStyleURL = URL(string: "https://qvcuk-live.akamaized.net/hls/live/2097112/qst/master.m3u8")!
+    private let qvcUKExtraURL = URL(string: "https://qvcuk-live.akamaized.net/hls/live/2097112/qex/master.m3u8")!
+    private let qvcJapanURL = URL(string: "https://cdn-live1.qvc.jp/iPhone/1501/1501.m3u8")!
+    private let qvcItaliaURL = URL(string: "https://qrg.akamaized.net/hls/live/2017383/lsqvc1it/master.m3u8")!
+    private let qvcGermanyURL = URL(string: "https://qvcde-live.akamaized.net/hls/live/2097104/qvc/master.m3u8")!
+    private let qvc2GermanyURL = URL(string: "https://qvcde-live.akamaized.net/hls/live/2097104/qps/master.m3u8")!
+    private let bigDishURL = URL(string: "https://amg01717-qvc-amg01717c1-stirr-us-2651.playouts.now.amagi.tv/qvc-bigdishdelayed-switcher-localnow/playlist.m3u8")!
+    private let qvcWestURL = URL(string: "https://qvc-amd-live.akamaized.net/hls/live/2034113/lsqvc1uswest/master.m3u8")!
+    private let hsnWestURL = URL(string: "https://qvc-amd-live.akamaized.net/hls/live/2034113/lshsn1uswest/master.m3u8")!
     @State private var players: [Player] = []
     @State private var newPlayerNameRail: String = ""
     private let playersStorageKey = "WATS_players_v1"
@@ -108,11 +137,93 @@ ACCEPTABLE CATEGORIES
                     HStack(spacing: gutter) {
                         // LEFT: Video + Channel pills above the video box
                         VStack(spacing: 12) {
-                            // Channel selector centered over the video frame
-                            CompactChannelToggle(selected: $selectedChannel)
-                                .frame(width: videoW)
-                                .padding(.top, 8)
+                            // Channel selector centered over the video frame (scrollable + end indicators)
+                            ZStack { // keep indicators layered over the capsule
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 8) {
+                                        ForEach(Array(channelItems.enumerated()), id: \.offset) { idx, item in
+                                            CompactChannelSegment(
+                                                title: item.title,
+                                                isSelected: selectedChannelIndex == idx
+                                            ) {
+                                                selectedChannelIndex = idx
+                                                setStream(url: item.url)
+                                            }
+                                            if idx < channelItems.count - 1 {
+                                                Rectangle()
+                                                    .fill(Color.white.opacity(0.25))
+                                                    .frame(width: 1, height: 18)
+                                                    .padding(.vertical, 6)
+                                            }
+                                        }
+                                    }
+                                    .background(
+                                        GeometryReader { gp in
+                                            Color.clear
+                                                .preference(key: HContentWidthPreferenceKey.self, value: gp.size.width)
+                                                .preference(key: HOffsetPreferenceKey.self, value: -gp.frame(in: .named("ChannelScroll")).minX)
+                                        }
+                                    )
+                                    .padding(6)
+                                }
+                                .coordinateSpace(name: "ChannelScroll")
+                                .background(Capsule().fill(Color.black.opacity(0.35)))
+                                .overlay(Capsule().stroke(Color.white.opacity(0.4), lineWidth: 1))
+                                .clipShape(Capsule())
 
+                                // Edge fades (always show when scrollable)
+                                if channelCanScroll {
+                                    HStack {
+                                        // Left fade
+                                        LinearGradient(
+                                            gradient: Gradient(colors: [Color.black.opacity(0.55), Color.black.opacity(0.0)]),
+                                            startPoint: .leading, endPoint: .trailing
+                                        )
+                                        .frame(width: 72, height: 36)
+                                        .opacity(channelHasMoreLeft ? 0.9 : 0.35)
+                                        Spacer(minLength: 0)
+                                    }
+                                    .allowsHitTesting(false)
+
+                                    HStack {
+                                        Spacer(minLength: 0)
+                                        // Right fade
+                                        LinearGradient(
+                                            gradient: Gradient(colors: [Color.black.opacity(0.0), Color.black.opacity(0.55)]),
+                                            startPoint: .leading, endPoint: .trailing
+                                        )
+                                        .frame(width: 72, height: 36)
+                                        .opacity(channelHasMoreRight ? 0.9 : 0.35)
+                                    }
+                                    .allowsHitTesting(false)
+                                }
+
+                                // Chevrons (only when there is more in that direction)
+                                if channelHasMoreLeft {
+                                    HStack { indicatorLeft; Spacer(minLength: 0) }
+                                        .allowsHitTesting(false)
+                                        .transition(.opacity)
+                                }
+                                if channelHasMoreRight {
+                                    HStack { Spacer(minLength: 0); indicatorRight }
+                                        .allowsHitTesting(false)
+                                        .transition(.opacity)
+                                }
+                            }
+                            .frame(width: videoW)
+                            .padding(.top, 8)
+                            .clipped()
+                            .onPreferenceChange(HContentWidthPreferenceKey.self) { contentW in
+                                channelContentWidth = contentW
+                                channelCanScroll = contentW > (videoW + 1)
+                                channelHasMoreRight = (channelScrollOffset + videoW) < (contentW - 2)
+                                channelHasMoreLeft = channelScrollOffset > 2
+                            }
+                            .onPreferenceChange(HOffsetPreferenceKey.self) { offset in
+                                channelScrollOffset = offset
+                                channelHasMoreRight = (offset + videoW) < (channelContentWidth - 2)
+                                channelHasMoreLeft = offset > 2
+                            }
                             // Video box
                             ZStack {
                                 Color.black
@@ -145,6 +256,33 @@ ACCEPTABLE CATEGORIES
                 } else {
                     selectedChannel = .qvc
                 }
+                // Build full channel list (order matters)
+                channelItems = [
+                    ChannelItem(title: "QVC", url: qvc1URL),
+                    ChannelItem(title: "QVC 2", url: qvc2URL),
+                    ChannelItem(title: "QVC 3", url: qvc3URL),
+                    ChannelItem(title: "HSN", url: hsnURL),
+                    ChannelItem(title: "HSN 2", url: hsn2URL),
+                    ChannelItem(title: "QVC In The Kitchen", url: inTheKitchenURL),
+                    ChannelItem(title: "QVC UK", url: qvcUKURL),
+                    ChannelItem(title: "QVC UK Beauty", url: qvcUKBeautyURL),
+                    ChannelItem(title: "QVC UK Style", url: qvcUKStyleURL),
+                    ChannelItem(title: "QVC UK Extra", url: qvcUKExtraURL),
+                    ChannelItem(title: "QVC Japan", url: qvcJapanURL),
+                    ChannelItem(title: "QVC Italia", url: qvcItaliaURL),
+                    ChannelItem(title: "QVC Germany", url: qvcGermanyURL),
+                    ChannelItem(title: "QVC 2 Germany", url: qvc2GermanyURL),
+                    ChannelItem(title: "The Big Dish", url: bigDishURL),
+                    ChannelItem(title: "QVC West", url: qvcWestURL),
+                    ChannelItem(title: "HSN West", url: hsnWestURL),
+                ]
+
+                // Pick initial index based on incoming streamURL if present
+                if let idx = channelItems.firstIndex(where: { $0.url.absoluteString == streamURL.absoluteString }) {
+                    selectedChannelIndex = idx
+                } else {
+                    selectedChannelIndex = 0 // default to QVC
+                }
                 setChannel(selectedChannel)
 
                 if let restored = loadPlayers(), !restored.isEmpty {
@@ -168,6 +306,7 @@ ACCEPTABLE CATEGORIES
                 player.pause()
                 setIdleTimerDisabled(false)
             }
+            .onChange(of: selectedChannelIndex) { setStream(url: channelItems[selectedChannelIndex].url) }
             .onChange(of: players) { savePlayers() }
             .onChange(of: recentGames) { saveRecentGames() }
             .onChange(of: allTimeTotals) { saveAllTimeTotals() }
@@ -786,6 +925,11 @@ ACCEPTABLE CATEGORIES
         }
         return records
     }
+    private func setStream(url: URL) {
+        let item = AVPlayerItem(url: url)
+        player.replaceCurrentItem(with: item)
+        player.play()
+    }
     private func setChannel(_ ch: Channel) {
         let url: URL
         switch ch {
@@ -1107,4 +1251,43 @@ fileprivate func dateShortStatic(_ d: Date) -> String {
             .background(shape.fill(Color.white.opacity(isFocused ? 0.10 : 0.06)))
             .overlay(shape.stroke(Color.white.opacity(isFocused ? 0.30 : 0.00), lineWidth: 1))
         }
+    }
+
+    // MARK: - Channel bar scroll indicators
+    private var indicatorLeft: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "chevron.left")
+                .font(.title2.weight(.black))
+                .foregroundColor(.white.opacity(0.95))
+        }
+        .padding(.leading, 8)
+        .padding(.vertical, 6)
+        .background(
+            LinearGradient(gradient: Gradient(colors: [Color.black.opacity(0.65), Color.black.opacity(0.0)]), startPoint: .leading, endPoint: .trailing)
+                .clipShape(Capsule())
+        )
+    }
+
+    private var indicatorRight: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "chevron.right")
+                .font(.title2.weight(.black))
+                .foregroundColor(.white.opacity(0.95))
+        }
+        .padding(.trailing, 8)
+        .padding(.vertical, 6)
+        .background(
+            LinearGradient(gradient: Gradient(colors: [Color.black.opacity(0.0), Color.black.opacity(0.65)]), startPoint: .leading, endPoint: .trailing)
+                .clipShape(Capsule())
+        )
+    }
+
+    // MARK: - Scroll offset preference keys for channel bar
+    private struct HOffsetPreferenceKey: PreferenceKey {
+        static var defaultValue: CGFloat = 0
+        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+    }
+    private struct HContentWidthPreferenceKey: PreferenceKey {
+        static var defaultValue: CGFloat = 0
+        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
     }
