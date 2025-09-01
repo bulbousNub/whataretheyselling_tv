@@ -8,6 +8,9 @@ struct LiveGameScreen: View {
 
     // MARK: - State
     @State private var player = AVPlayer()
+    private enum Channel: String { case qvc = "QVC", hsn = "HSN" }
+    @State private var selectedChannel: Channel = .qvc
+    private let hsnURL = URL(string: "https://qvc-amd-live.akamaized.net/hls/live/2034113/lshsn1us/master.m3u8")!
     @State private var players: [Player] = []
     @State private var newPlayerNameRail: String = ""
     private let playersStorageKey = "WATS_players_v1"
@@ -101,14 +104,22 @@ ACCEPTABLE CATEGORIES
                 ZStack {
                     Color.black // full-canvas background
                     HStack(spacing: gutter) {
-                        // LEFT: Video
-                        ZStack {
-                            Color.black
-                            VideoPlayer(player: player)
-                                .frame(width: videoW, height: videoH)
-                                .clipped()
+                        // LEFT: Video + Channel pills above the video box
+                        VStack(spacing: 12) {
+                            // Channel selector centered over the video frame
+                            CompactChannelToggle(selected: $selectedChannel)
+                                .frame(width: videoW)
+                                .padding(.top, 8)
+
+                            // Video box
+                            ZStack {
+                                Color.black
+                                VideoPlayer(player: player)
+                                    .clipped()
+                            }
+                            .frame(width: videoW, height: videoH)
                         }
-                        .frame(width: availableW, height: totalH)
+                        .frame(width: availableW, height: totalH, alignment: .top)
 
                         // RIGHT: Rail
                         rightRail(width: railW, height: totalH)
@@ -122,9 +133,13 @@ ACCEPTABLE CATEGORIES
             .ignoresSafeArea()
             .onAppear {
                 setIdleTimerDisabled(true)
-                let item = AVPlayerItem(url: streamURL)
-                player.replaceCurrentItem(with: item)
-                player.play()
+                // Initialize selected channel based on the provided streamURL
+                if streamURL.absoluteString == hsnURL.absoluteString {
+                    selectedChannel = .hsn
+                } else {
+                    selectedChannel = .qvc
+                }
+                setChannel(selectedChannel)
 
                 if let restored = loadPlayers(), !restored.isEmpty {
                     players = restored
@@ -150,6 +165,7 @@ ACCEPTABLE CATEGORIES
             .onChange(of: players) { savePlayers() }
             .onChange(of: recentGames) { saveRecentGames() }
             .onChange(of: allTimeTotals) { saveAllTimeTotals() }
+            .onChange(of: selectedChannel) { setChannel(selectedChannel) }
             .onChange(of: scenePhase) { _, newPhase in
                 switch newPhase {
                 case .active:
@@ -429,6 +445,66 @@ ACCEPTABLE CATEGORIES
     }
 
 
+    private struct CompactChannelToggle: View {
+        @Binding var selected: Channel
+        var body: some View {
+            let shape = Capsule()
+            HStack(spacing: 8) {
+                CompactChannelSegment(title: Channel.qvc.rawValue, isSelected: selected == .qvc) {
+                    selected = .qvc
+                }
+
+                // subtle divider between segments
+                Rectangle()
+                    .fill(Color.white.opacity(0.25))
+                    .frame(width: 1, height: 18)
+                    .padding(.vertical, 6)
+
+                CompactChannelSegment(title: Channel.hsn.rawValue, isSelected: selected == .hsn) {
+                    selected = .hsn
+                }
+            }
+            .padding(6)
+            .background(shape.fill(Color.black.opacity(0.35)))
+            .overlay(shape.stroke(Color.white.opacity(0.4), lineWidth: 1))
+            .clipShape(shape)
+            .fixedSize(horizontal: true, vertical: true)
+        }
+    }
+
+    private struct CompactChannelSegment: View {
+        let title: String
+        let isSelected: Bool
+        let action: () -> Void
+        @FocusState private var isFocused: Bool
+
+        var body: some View {
+            let segmentShape = Capsule()
+            Text(title)
+                .font(.footnote).bold()
+                .foregroundColor(.white)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    segmentShape.fill(
+                        isSelected ? Color.white.opacity(isFocused ? 0.28 : 0.22)
+                                   : Color.white.opacity(isFocused ? 0.18 : 0.10)
+                    )
+                )
+                .overlay(
+                    segmentShape.stroke(Color.white.opacity(isFocused ? 0.7 : 0.35), lineWidth: isFocused ? 1 : 0.8)
+                )
+                .contentShape(segmentShape)
+                .focusable(true)
+                .focused($isFocused)
+                .focusEffectDisabled(true)
+                .scaleEffect(isFocused ? 1.02 : 1.0)
+                .animation(.easeOut(duration: 0.10), value: isFocused)
+                .onTapGesture { action() }
+        }
+    }
+
+
     @ViewBuilder
     private var bottomBar: some View {
         HStack(spacing: 16) {
@@ -684,6 +760,13 @@ ACCEPTABLE CATEGORIES
         }
         return records
     }
+    private func setChannel(_ ch: Channel) {
+        let url = (ch == .qvc) ? streamURL : hsnURL
+        let item = AVPlayerItem(url: url)
+        player.replaceCurrentItem(with: item)
+        player.play()
+    }
+
     private func setIdleTimerDisabled(_ disabled: Bool) {
         // tvOS: prevent screensaver/sleep while app is active
         DispatchQueue.main.async {
