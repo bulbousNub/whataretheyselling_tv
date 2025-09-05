@@ -1,6 +1,7 @@
 import SwiftUI
 import AVKit
 import UIKit
+import AVFoundation
 
 struct LiveGameScreen: View {
     // MARK: - Inputs
@@ -8,8 +9,6 @@ struct LiveGameScreen: View {
 
     // MARK: - State
     @State private var player = AVPlayer()
-    private enum Channel: String { case qvc = "QVC", qvc2 = "QVC 2", hsn = "HSN", hsn2 = "HSN 2" }
-    @State private var selectedChannel: Channel = .qvc
     // Scrollable channel picker model/state
     private struct ChannelItem: Identifiable, Equatable {
         let id = UUID()
@@ -18,6 +17,11 @@ struct LiveGameScreen: View {
     }
     @State private var channelItems: [ChannelItem] = []
     @State private var selectedChannelIndex: Int = 0
+    // Fullscreen presentation state for the video player
+    @State private var isPresentingFullscreen = false
+    // tvOS focus routing
+    private enum FocusTarget { case player, channelBar, rightRail, bottomBar }
+    @FocusState private var focusTarget: FocusTarget?
     // Horizontal scroll state for channel bar
     @State private var channelContentWidth: CGFloat = 0
     @State private var channelScrollOffset: CGFloat = 0
@@ -119,6 +123,9 @@ ACCEPTABLE CATEGORIES
             let totalW = geo.size.width
             let totalH = geo.size.height
 
+            let bottomBarH: CGFloat = 88
+            let bottomInset = geo.safeAreaInsets.bottom
+
             // Right rail width: slim but readable
             let minRail: CGFloat = 360
             let railW = max(minRail, totalW * 0.22)
@@ -213,28 +220,65 @@ ACCEPTABLE CATEGORIES
                             .frame(width: videoW)
                             .padding(.top, 8)
                             .clipped()
+                            .focusSection()
                             .onPreferenceChange(HContentWidthPreferenceKey.self) { contentW in
-                                channelContentWidth = contentW
-                                channelCanScroll = contentW > (videoW + 1)
-                                channelHasMoreRight = (channelScrollOffset + videoW) < (contentW - 2)
-                                channelHasMoreLeft = channelScrollOffset > 2
+                                // Guard to avoid re-rendering on tiny changes while scrolling
+                                if abs(contentW - channelContentWidth) > 0.5 {
+                                    channelContentWidth = contentW
+                                    let canScroll = contentW > (videoW + 1)
+                                    if canScroll != channelCanScroll { channelCanScroll = canScroll }
+                                    let hasRight = (channelScrollOffset + videoW) < (contentW - 2)
+                                    if hasRight != channelHasMoreRight { channelHasMoreRight = hasRight }
+                                    let hasLeft = channelScrollOffset > 2
+                                    if hasLeft != channelHasMoreLeft { channelHasMoreLeft = hasLeft }
+                                }
                             }
                             .onPreferenceChange(HOffsetPreferenceKey.self) { offset in
-                                channelScrollOffset = offset
-                                channelHasMoreRight = (offset + videoW) < (channelContentWidth - 2)
-                                channelHasMoreLeft = offset > 2
+                                // Quantize offset to reduce frequent tiny updates; only mutate when it materially changes
+                                let quantized = (offset / 2.0).rounded() * 2.0
+                                if abs(quantized - channelScrollOffset) > 0.5 {
+                                    channelScrollOffset = quantized
+                                    let hasRight = (quantized + videoW) < (channelContentWidth - 2)
+                                    if hasRight != channelHasMoreRight { channelHasMoreRight = hasRight }
+                                    let hasLeft = quantized > 2
+                                    if hasLeft != channelHasMoreLeft { channelHasMoreLeft = hasLeft }
+                                }
                             }
                             // Video box
                             ZStack {
                                 Color.black
-                                VideoPlayer(player: player)
+                                TVPlayerView(player: player)
                                     .clipped()
+                                    .focusable(true)
+                                    .focused($focusTarget, equals: .player)
+
+                                // Invisible, full-frame click target to enter Full Screen
+                                Button(action: { isPresentingFullscreen = true }) {
+                                    Color.clear
+                                }
+                                .buttonStyle(.plain)
+                                .contentShape(Rectangle())
+                                .frame(maxWidth: .infinity, maxHeight: .infinity) // fill video area for taps
+                                .focusable(false)          // do not steal focus from the player
+                                .focusEffectDisabled(true) // prevent any tvOS focus halo
+                                .opacity(0.0)              // no draw; remain hittable
+                                .allowsHitTesting(focusTarget == .player)       // only intercept when player focused
+                                .accessibilityHidden(true)
+
+                                // Small visible badge in the corner (dim until the player is focused)
+                                FullscreenBadge { isPresentingFullscreen = true }
+                                    .padding(12)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                                    .opacity(focusTarget == .player ? 1.0 : 0.35)
+                                    .allowsHitTesting(true)
+                                    .zIndex(1)
                             }
                             .frame(width: videoW, height: videoH)
+                            .focusSection()
                         }
                         .frame(width: availableW, height: totalH, alignment: .top)
 
-                        // RIGHT: Rail
+                        // RIGHT: Rail (full height; we’ll pad the scroll content instead)
                         rightRail(width: railW, height: totalH)
                     }
                 }
@@ -245,17 +289,10 @@ ACCEPTABLE CATEGORIES
             }
             .ignoresSafeArea()
             .onAppear {
-                setIdleTimerDisabled(true)
-                // Initialize selected channel based on the provided streamURL
-                if streamURL.absoluteString == qvc2URL.absoluteString {
-                    selectedChannel = .qvc2
-                } else if streamURL.absoluteString == hsn2URL.absoluteString {
-                    selectedChannel = .hsn2
-                } else if streamURL.absoluteString == hsnURL.absoluteString {
-                    selectedChannel = .hsn
-                } else {
-                    selectedChannel = .qvc
-                }
+                // Configure audio session & player for smoother HLS playback
+                try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+                try? AVAudioSession.sharedInstance().setActive(true)
+                player.automaticallyWaitsToMinimizeStalling = true
                 // Build full channel list (order matters)
                 channelItems = [
                     ChannelItem(title: "QVC", url: qvc1URL),
@@ -283,7 +320,10 @@ ACCEPTABLE CATEGORIES
                 } else {
                     selectedChannelIndex = 0 // default to QVC
                 }
-                setChannel(selectedChannel)
+
+                if player.currentItem == nil {
+                    setStream(url: channelItems[selectedChannelIndex].url)
+                }
 
                 if let restored = loadPlayers(), !restored.isEmpty {
                     players = restored
@@ -301,16 +341,16 @@ ACCEPTABLE CATEGORIES
                 if Calendar.current.isDateInToday(gameStartedAt) == false {
                     gameStartedAt = Date()
                 }
+                // Default focus to the player so the Siri Remote can bring up controls immediately
+                if focusTarget == nil { focusTarget = .player }
             }
             .onDisappear {
                 player.pause()
-                setIdleTimerDisabled(false)
             }
             .onChange(of: selectedChannelIndex) { setStream(url: channelItems[selectedChannelIndex].url) }
             .onChange(of: players) { savePlayers() }
             .onChange(of: recentGames) { saveRecentGames() }
             .onChange(of: allTimeTotals) { saveAllTimeTotals() }
-            .onChange(of: selectedChannel) { setChannel(selectedChannel) }
             .onChange(of: scenePhase) { _, newPhase in
                 switch newPhase {
                 case .active:
@@ -318,6 +358,10 @@ ACCEPTABLE CATEGORIES
                 default:
                     setIdleTimerDisabled(false)
                 }
+            }
+            .fullScreenCover(isPresented: $isPresentingFullscreen) {
+                FullscreenPlayerContainer(player: player)
+                    .ignoresSafeArea()
             }
         }
     }
@@ -350,8 +394,6 @@ ACCEPTABLE CATEGORIES
                 allTimeLeaderboardListContent
                 Spacer()
             case .settings:
-                panelHeader(title: "Settings")
-                Divider()
                 SettingsScreen(
                     players: $players,
                     onResetRecentGames: { resetRecentGames() },
@@ -361,6 +403,7 @@ ACCEPTABLE CATEGORIES
         }
         .frame(width: width, height: height)
         .background(Color.black.opacity(0.35))
+        .focusSection()
     }
     @ViewBuilder
     private var rulesPanelContent: some View {
@@ -369,30 +412,106 @@ ACCEPTABLE CATEGORIES
     }
 
     private struct FocusableRulesList: View {
-        let text: String
+        let paragraphs: [String]
         @FocusState private var focusedIndex: Int?
 
-        private var paragraphs: [String] {
-            // Split on blank lines to create focusable chunks for tvOS
-            text.components(separatedBy: "\n\n").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        init(text: String) {
+            self.paragraphs = Self.makeParagraphs(from: text)
+        }
+
+        private static func makeParagraphs(from text: String) -> [String] {
+            // Split on blank lines, but further split any block that contains bullet lines ("• ")
+            let blocks = text.components(separatedBy: "\n\n")
+            var result: [String] = []
+            for raw in blocks {
+                let block = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !block.isEmpty else { continue }
+                if block.contains("\n• ") || block.hasPrefix("• ") {
+                    // Separate non-bullet header lines from bullet lines so each bullet becomes its own focusable row
+                    let lines = block.components(separatedBy: .newlines)
+                    var headerLines: [String] = []
+                    var bulletLines: [String] = []
+                    for line in lines {
+                        let trimmed = line.trimmingCharacters(in: .whitespaces)
+                        if trimmed.hasPrefix("•") {
+                            bulletLines.append(trimmed)
+                        } else if !trimmed.isEmpty {
+                            headerLines.append(trimmed)
+                        }
+                    }
+                    let header = headerLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !header.isEmpty { result.append(header) }
+                    result.append(contentsOf: bulletLines)
+                } else {
+                    result.append(block)
+                }
+            }
+            return result
         }
 
         var body: some View {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(Array(paragraphs.enumerated()), id: \.offset) { index, para in
-                        ParagraphRow(text: para, isFocused: focusedIndex == index)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        ForEach(Array(paragraphs.enumerated()), id: \.offset) { index, para in
+                            ParagraphRow(text: para, isFocused: focusedIndex == index)
+                                .focusable(true)
+                                .focused($focusedIndex, equals: index)
+                                .id(index)
+                        }
+                        // Focusable runway tail: minimally visible so tvOS will assign focus reliably
+                        Rectangle()
+                            .fill(Color.white.opacity(0.001))
+                            .frame(height: 120)
+                            .frame(maxWidth: .infinity)
+                            .contentShape(Rectangle())
                             .focusable(true)
-                            .focused($focusedIndex, equals: index)
+                            .focused($focusedIndex, equals: paragraphs.count)
+                            .focusEffectDisabled(true)
+                            .id("rules_tail")
+                            .accessibilityHidden(true)
                     }
-                    Color.clear
-                        .frame(height: 240) // extra scroll runway so the final items aren’t clipped and remain reachable by focus on tvOS
+                    .padding()
+                    .padding(.bottom, 0)
                 }
-                .padding()
-            }
-            .onAppear {
-                // Ensure something is focused so the remote can scroll immediately
-                if focusedIndex == nil { focusedIndex = 0 }
+                .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 40) }
+                .focusSection()
+                .onAppear {
+                    // Ensure something is focused so the remote can scroll immediately
+                    if focusedIndex == nil { focusedIndex = 0 }
+                }
+                .onChange(of: focusedIndex) { _, newVal in
+                    // When the tail is focused, force-scroll to absolute bottom
+                    if newVal == paragraphs.count {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo("rules_tail", anchor: .bottom)
+                        }
+                    }
+                }
+                .onMoveCommand { direction in
+                    switch direction {
+                    case .down:
+                        let lastIndex = max(0, paragraphs.count - 1)
+                        if focusedIndex == lastIndex {
+                            // Move focus to tail immediately, then scroll to ensure it’s fully visible
+                            focusedIndex = paragraphs.count
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                proxy.scrollTo("rules_tail", anchor: .bottom)
+                            }
+                        }
+                    case .up:
+                        let lastIndex = max(0, paragraphs.count - 1)
+                        if focusedIndex == paragraphs.count { // on the runway tail
+                            // Move focus back to the last paragraph first, then scroll it into view
+                            focusedIndex = lastIndex
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                proxy.scrollTo(lastIndex, anchor: .bottom)
+                            }
+                        }
+                    default:
+                        break
+                    }
+                }
             }
         }
     }
@@ -465,26 +584,25 @@ ACCEPTABLE CATEGORIES
         }
     }
 
-    private func dateShort(_ d: Date) -> String {
+    private static let dfShort: DateFormatter = {
         let df = DateFormatter()
         df.dateStyle = .short
         df.timeStyle = .short
-        return df.string(from: d)
-    }
+        return df
+    }()
+
+    private func dateShort(_ d: Date) -> String { Self.dfShort.string(from: d) }
 
     @ViewBuilder
     private var titleView: some View {
-        VStack(spacing: 0) {
-            Text("What Are")
-                .lineLimit(1)
-            Text("They Selling?")
-                .lineLimit(1)
+        VStack {
+            Image("GameLogo") // <- the asset name you gave it in Assets.xcassets
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: 500, maxHeight: 250) // adjust as needed
+                .padding(.top, 12)
         }
-        .font(.largeTitle)
-        .bold()
-        .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity, alignment: .center)
-        .padding(.top)
     }
 
     @ViewBuilder
@@ -579,63 +697,17 @@ ACCEPTABLE CATEGORIES
             }
             .frame(width: 96, height: 60)
             .contentShape(shape)
+            .focusEffectDisabled(true)   // kill the large tvOS halo
             .scaleEffect(isFocused ? 1.06 : 1.0)
             .animation(.easeOut(duration: 0.15), value: isFocused)
             .focusable(true)
             .focused($isFocused)
-            .onTapGesture {
-                action()
-            }
+            .onTapGesture { action() }   // gesture-based tap to avoid Button focus ring
+            .accessibilityLabel("Add \(label) points")
         }
     }
 
 
-    private struct CompactChannelToggle: View {
-        @Binding var selected: Channel
-        var body: some View {
-            let shape = Capsule()
-            HStack(spacing: 8) {
-                CompactChannelSegment(title: Channel.qvc.rawValue, isSelected: selected == .qvc) {
-                    selected = .qvc
-                }
-
-                // divider
-                Rectangle()
-                    .fill(Color.white.opacity(0.25))
-                    .frame(width: 1, height: 18)
-                    .padding(.vertical, 6)
-
-                CompactChannelSegment(title: Channel.qvc2.rawValue, isSelected: selected == .qvc2) {
-                    selected = .qvc2
-                }
-
-                // divider
-                Rectangle()
-                    .fill(Color.white.opacity(0.25))
-                    .frame(width: 1, height: 18)
-                    .padding(.vertical, 6)
-
-                CompactChannelSegment(title: Channel.hsn.rawValue, isSelected: selected == .hsn) {
-                    selected = .hsn
-                }
-
-                // divider
-                Rectangle()
-                    .fill(Color.white.opacity(0.25))
-                    .frame(width: 1, height: 18)
-                    .padding(.vertical, 6)
-
-                CompactChannelSegment(title: Channel.hsn2.rawValue, isSelected: selected == .hsn2) {
-                    selected = .hsn2
-                }
-            }
-            .padding(6)
-            .background(shape.fill(Color.black.opacity(0.35)))
-            .overlay(shape.stroke(Color.white.opacity(0.4), lineWidth: 1))
-            .clipShape(shape)
-            .fixedSize(horizontal: true, vertical: true)
-        }
-    }
 
     private struct CompactChannelSegment: View {
         let title: String
@@ -800,6 +872,7 @@ ACCEPTABLE CATEGORIES
         } message: {
             Text("This will record the current scores to Recent Games, add them to the All-Time Leaderboard, reset all scores to 0, and start a new game.")
         }
+        .focusSection()
     }
 
     // MARK: - Logic
@@ -819,26 +892,36 @@ ACCEPTABLE CATEGORIES
         }
     }
 
+    // Codable helper for Player persistence (backward compatible)
+    private struct PlayerCodec: Codable { let name: String; let score: Int }
+
     private func savePlayers() {
-        let payload: [[String: Any]] = players.map { ["name": $0.name, "score": $0.score] }
-        if let data = try? JSONSerialization.data(withJSONObject: payload, options: []) {
+        let payload: [PlayerCodec] = players.map { PlayerCodec(name: $0.name, score: $0.score) }
+        if let data = try? JSONEncoder().encode(payload) {
             UserDefaults.standard.set(data, forKey: playersStorageKey)
         }
     }
 
     private func loadPlayers() -> [Player]? {
-        guard let data = UserDefaults.standard.data(forKey: playersStorageKey),
-              let raw = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return nil }
-        var restored: [Player] = []
-        for item in raw {
-            if let name = item["name"] as? String {
-                let score = (item["score"] as? Int) ?? 0
-                var p = Player(name: name)
-                p.score = score
-                restored.append(p)
-            }
+        guard let data = UserDefaults.standard.data(forKey: playersStorageKey) else { return nil }
+        // Try Codable first
+        if let decoded = try? JSONDecoder().decode([PlayerCodec].self, from: data) {
+            return decoded.map { codec in var p = Player(name: codec.name); p.score = codec.score; return p }
         }
-        return restored
+        // Fallback to legacy dict array
+        if let raw = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            var restored: [Player] = []
+            for item in raw {
+                if let name = item["name"] as? String {
+                    let score = (item["score"] as? Int) ?? 0
+                    var p = Player(name: name)
+                    p.score = score
+                    restored.append(p)
+                }
+            }
+            return restored
+        }
+        return nil
     }
 
     private func endGame() {
@@ -859,20 +942,24 @@ ACCEPTABLE CATEGORIES
         gameStartedAt = Date()
     }
     private func saveAllTimeTotals() {
-        let dict = allTimeTotals
-        if let data = try? JSONSerialization.data(withJSONObject: dict, options: []) {
+        if let data = try? JSONEncoder().encode(allTimeTotals) {
             UserDefaults.standard.set(data, forKey: allTimeTotalsStorageKey)
         }
     }
 
     private func loadAllTimeTotals() -> [String: Int]? {
-        guard let data = UserDefaults.standard.data(forKey: allTimeTotalsStorageKey),
-              let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        var totals: [String: Int] = [:]
-        for (k, v) in raw {
-            totals[k] = v as? Int ?? 0
+        guard let data = UserDefaults.standard.data(forKey: allTimeTotalsStorageKey) else { return nil }
+        // Try Codable first
+        if let decoded = try? JSONDecoder().decode([String: Int].self, from: data) {
+            return decoded
         }
-        return totals
+        // Fallback to legacy dict
+        if let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            var totals: [String: Int] = [:]
+            for (k, v) in raw { totals[k] = v as? Int ?? 0 }
+            return totals
+        }
+        return nil
     }
 
     private func resetRecentGames() {
@@ -892,59 +979,58 @@ ACCEPTABLE CATEGORIES
     }
 
     private func saveRecentGames() {
-        let payload: [[String: Any]] = recentGames.map { rec in
-            return [
-                "startedAt": rec.startedAt.timeIntervalSince1970,
-                "endedAt": rec.endedAt.timeIntervalSince1970,
-                "entries": rec.entries.map { ["name": $0.name, "score": $0.score] }
-            ]
-        }
-        if let data = try? JSONSerialization.data(withJSONObject: payload, options: []) {
+        if let data = try? JSONEncoder().encode(recentGames) {
             UserDefaults.standard.set(data, forKey: recentGamesStorageKey)
         }
     }
 
     private func loadRecentGames() -> [GameRecord]? {
-        guard let data = UserDefaults.standard.data(forKey: recentGamesStorageKey),
-              let raw = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return nil }
-        var records: [GameRecord] = []
-        for item in raw {
-            guard let s = item["startedAt"] as? Double,
-                  let e = item["endedAt"] as? Double,
-                  let arr = item["entries"] as? [[String: Any]] else { continue }
-            let started = Date(timeIntervalSince1970: s)
-            let ended = Date(timeIntervalSince1970: e)
-            var entries: [ScoreEntry] = []
-            for ent in arr {
-                if let name = ent["name"] as? String {
-                    let score = (ent["score"] as? Int) ?? 0
-                    entries.append(ScoreEntry(name: name, score: score))
+        guard let data = UserDefaults.standard.data(forKey: recentGamesStorageKey) else { return nil }
+        // Try Codable first
+        if let decoded = try? JSONDecoder().decode([GameRecord].self, from: data) {
+            return decoded
+        }
+        // Fallback to legacy dict array
+        if let raw = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            var records: [GameRecord] = []
+            for item in raw {
+                guard let s = item["startedAt"] as? Double,
+                      let e = item["endedAt"] as? Double,
+                      let arr = item["entries"] as? [[String: Any]] else { continue }
+                let started = Date(timeIntervalSince1970: s)
+                let ended = Date(timeIntervalSince1970: e)
+                var entries: [ScoreEntry] = []
+                for ent in arr {
+                    if let name = ent["name"] as? String {
+                        let score = (ent["score"] as? Int) ?? 0
+                        entries.append(ScoreEntry(name: name, score: score))
+                    }
                 }
+                records.append(GameRecord(startedAt: started, endedAt: ended, entries: entries))
             }
-            records.append(GameRecord(startedAt: started, endedAt: ended, entries: entries))
+            return records
         }
-        return records
+        return nil
     }
+    // MARK: - Playback helpers (asset-first, system-managed captions)
+    private func playURL(_ url: URL, preferredCaptionLang: String?) {
+        let asset = AVURLAsset(url: url)
+        let keys = ["playable"]
+        asset.loadValuesAsynchronously(forKeys: keys) {
+            var error: NSError?
+            let status = asset.statusOfValue(forKey: "playable", error: &error)
+            DispatchQueue.main.async {
+                guard status == .loaded, error == nil else { return }
+                let item = AVPlayerItem(asset: asset)
+                // Let AVPlayerViewController handle subtitles/audio via its native UI
+                self.player.replaceCurrentItem(with: item)
+                self.player.play()
+            }
+        }
+    }
+
     private func setStream(url: URL) {
-        let item = AVPlayerItem(url: url)
-        player.replaceCurrentItem(with: item)
-        player.play()
-    }
-    private func setChannel(_ ch: Channel) {
-        let url: URL
-        switch ch {
-        case .qvc:
-            url = streamURL
-        case .qvc2:
-            url = qvc2URL
-        case .hsn:
-            url = hsnURL
-        case .hsn2:
-            url = hsn2URL
-        }
-        let item = AVPlayerItem(url: url)
-        player.replaceCurrentItem(with: item)
-        player.play()
+        playURL(url, preferredCaptionLang: nil)
     }
 
     private func setIdleTimerDisabled(_ disabled: Bool) {
@@ -952,6 +1038,43 @@ ACCEPTABLE CATEGORIES
         DispatchQueue.main.async {
             UIApplication.shared.isIdleTimerDisabled = disabled
         }
+    }
+}
+
+
+// MARK: - Native tvOS Player Wrapper (AVPlayerViewController)
+struct TVPlayerView: UIViewControllerRepresentable {
+    let player: AVPlayer
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let vc = AVPlayerViewController()
+        vc.player = player
+        vc.showsPlaybackControls = true
+        vc.requiresLinearPlayback = false
+        vc.videoGravity = .resizeAspect
+        vc.view.isUserInteractionEnabled = true
+        return vc
+    }
+    func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
+        if vc.player !== player { vc.player = player }
+    }
+}
+
+// MARK: - Full Screen Player Container
+private struct FullscreenPlayerContainer: UIViewControllerRepresentable {
+    let player: AVPlayer
+
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let vc = AVPlayerViewController()
+        vc.player = player
+        vc.showsPlaybackControls = true
+        vc.requiresLinearPlayback = false
+        vc.videoGravity = .resizeAspect
+        vc.view.isUserInteractionEnabled = true
+        return vc
+    }
+
+    func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
+        if vc.player !== player { vc.player = player }
     }
 }
 
@@ -1064,6 +1187,7 @@ struct SettingsScreen: View {
         guard !protectedNames.contains(name) else { return }
         players.remove(at: index)
     }
+
     private struct FocusTrashIcon: View {
         let action: () -> Void
         @FocusState private var isFocused: Bool
@@ -1081,6 +1205,7 @@ struct SettingsScreen: View {
             }
             .frame(width: 44, height: 44)
             .contentShape(shape)
+            .focusEffectDisabled(true)
             .scaleEffect(isFocused ? 1.05 : 1.0)
             .animation(.easeOut(duration: 0.12), value: isFocused)
             .focusable(true)
@@ -1088,20 +1213,36 @@ struct SettingsScreen: View {
             .onTapGesture { action() }
         }
     }
+
+
 }
 
+
 // MARK: - Game History Models
-struct GameRecord: Identifiable, Equatable {
-    let id = UUID()
+struct GameRecord: Identifiable, Equatable, Codable {
+    let id: UUID
     let startedAt: Date
     let endedAt: Date
     let entries: [ScoreEntry]
+
+    init(id: UUID = UUID(), startedAt: Date, endedAt: Date, entries: [ScoreEntry]) {
+        self.id = id
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+        self.entries = entries
+    }
 }
 
-struct ScoreEntry: Identifiable, Equatable {
-    let id = UUID()
+struct ScoreEntry: Identifiable, Equatable, Codable {
+    let id: UUID
     let name: String
     let score: Int
+
+    init(id: UUID = UUID(), name: String, score: Int) {
+        self.id = id
+        self.name = name
+        self.score = score
+    }
 }
 
 // MARK: - Recent Games Screen
@@ -1191,11 +1332,17 @@ struct AllTimeLeaderboardScreen: View {
     }
 }
 
+
+fileprivate enum _WATSFormatters {
+    static let short: DateFormatter = {
+        let df = DateFormatter()
+        df.dateStyle = .short
+        df.timeStyle = .short
+        return df
+    }()
+}
 fileprivate func dateShortStatic(_ d: Date) -> String {
-    let df = DateFormatter()
-    df.dateStyle = .short
-    df.timeStyle = .short
-    return df.string(from: d)
+    _WATSFormatters.short.string(from: d)
 }
 
     private struct FocusableRecentGamesList: View {
@@ -1291,3 +1438,35 @@ fileprivate func dateShortStatic(_ d: Date) -> String {
         static var defaultValue: CGFloat = 0
         static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
     }
+
+
+// MARK: - Small on-video badge for entering Full Screen
+private struct FullscreenBadge: View {
+    let action: () -> Void
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        // Gesture-based, so no tvOS Button halo
+        Image(systemName: "arrow.up.left.and.arrow.down.right")
+            .imageScale(.medium)
+            .padding(6)
+            .background(
+                shape.fill(Color.black.opacity(focused ? 0.75 : 0.45)) // slightly brighter when focused
+            )
+            .overlay(
+                shape.stroke(Color.white.opacity(focused ? 1.0 : 0.5), lineWidth: focused ? 3 : 1.5) // stronger outline
+            )
+            .foregroundColor(.white)
+            .contentShape(shape)
+            .focusable(true)
+            .focused($focused)
+            .focusEffectDisabled(true)
+            .scaleEffect(focused ? 1.12 : 1.0) // slightly larger on focus
+            .shadow(color: Color.white.opacity(focused ? 0.60 : 0), radius: focused ? 10 : 0) // slightly stronger glow on focus
+            .animation(.easeOut(duration: 0.12), value: focused)
+            .onTapGesture { action() }
+            .accessibilityLabel("Enter Full Screen")
+            .accessibilityHint("Play video in full-screen mode")
+    }
+}
